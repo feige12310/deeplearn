@@ -1,0 +1,140 @@
+import os
+import numpy as np
+from tensorflow.keras import datasets
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+
+def mnist_dataset():
+    (x,y),(x_test,y_test) = datasets.mnist.load_data()
+    x = x/255.0
+    x_test = x_test/255.0
+    return (x,y),(x_test,y_test)
+
+class Matmul():
+    def __init__(self):
+        self.mem = {}
+    
+    def forward(self,x,W):
+        h = np.matmul(x,W)
+        self.mem = {'x':x,'W':W}
+        return h
+
+    def backward(self, grad_y):
+        x = self.mem['x']
+        W = self.mem['W']
+        grad_x = np.matmul(grad_y, W.T)
+        grad_W = np.matmul(x.T,grad_y)
+        return grad_x,grad_W
+
+class Relu():
+    def __init__(self):
+        self.mem = {}
+
+    def forward(self,x):
+        self.mem['x'] = x
+        return np.where(x>0,x,np.zeros_like(x))
+
+    def backward(self,grad_y):
+        x = self.mem['x']
+        return (x>0).astype(np.float32)*grad_y
+
+class Softmax():
+    def __init__(self):
+        self.mem = {}
+        self.epsilon = 1e-12 #防止分母出现0
+
+    def forward(self,x):
+        x_exp = np.exp(x)
+        denominator = np.sum(x_exp,axis=1,keepdims=True)
+        out = x_exp/(denominator+self.epsilon)
+        self.mem['out'] = out
+        self.mem['x_exp'] = x_exp
+        return out
+
+    def backward(self,grad_y):
+        s = self.mem['out']
+        sisj = np.matmul(np.expand_dims(s,axis=2),np.expand_dims(s,axis=1))
+        g_y_exp = np.expand_dims(grad_y,axis=1)
+        tmp = np.matmul(g_y_exp,sisj)
+        tmp = np.squeeze(tmp,axis=1)
+        softmax_grad = -tmp + grad_y*s
+        return softmax_grad
+
+class Cross_entropy():
+    def __init__(self):
+        self.epsilon = 1e-12
+        self.mem = {}
+
+    def forward(self,x,labels):
+        log_prob = np.log(x+self.epsilon)
+        out = np.mean(np.sum(-log_prob*labels,axis=1))
+        self.mem['x'] = x
+        return out
+
+    def backward(self,labels):
+        x = self.mem['x']
+        return -1/(x+self.epsilon)*labels
+
+class myModel():
+    def __init__(self):
+        self.W1 = np.random.normal(size=[28*28+1,100]) #初始化W1
+        self.W2 = np.random.normal(size=[100,10]) #初始化W2
+        self.mul_h1 = Matmul() #初始化隐藏层1
+        self.relu = Relu() #初始化relu层
+        self.mul_h2 = Matmul() #初始化隐藏层2
+        self.softmax = Softmax() #初始化softmax层
+        self.cross_en = Cross_entropy() #初始化交叉熵运算
+
+    def forward(self,x,labels):
+        x = x.reshape(-1,28*28)
+        bias = np.ones(shape=[x.shape[0],1])
+        x = np.concatenate([x,bias],axis=1)
+        self.h1 = self.mul_h1.forward(x,self.W1)
+        self.h1_relu  = self.relu.forward(self.h1)
+        self.h2 = self.mul_h2.forward(self.h1_relu,self.W2)
+        
+        self.h2_soft = self.softmax.forward(self.h2)
+        self.loss = self.cross_en.forward(self.h2_soft,labels)
+
+    def backward(self,labels):
+        self.loss_grad = self.cross_en.backward(labels)
+        
+
+        self.h2_soft_grad = self.softmax.backward(self.loss_grad)
+        self.h2_grad,self.W2_grad = self.mul_h2.backward(self.h2_soft_grad)
+        self.h1_relu_grad = self.relu.backward(self.h2_grad)
+        self.h1_grad,self.W1_grad = self.mul_h1.backward(self.h1_relu_grad)
+    
+model = myModel()
+
+def compute_accuracy(prob,labels):
+    predictions = np.argmax(prob,axis=1)
+    truth = np.argmax(labels,axis=1)
+    return np.mean(predictions==truth)
+
+def train_one_step(model,x,y):
+    model.forward(x,y)
+    model.backward(y)
+    model.W1 -= 1.5e-5*model.W1_grad
+    model.W2 -= 1.5e-5*model.W2_grad
+    loss = model.loss
+    accuracy  = compute_accuracy(model.h2_soft,y)
+    return loss,accuracy
+
+def test(model,x,y):
+    model.forward(x,y)
+    loss = model.loss
+    accuracy = compute_accuracy(model.h2_soft,y)
+    return loss,accuracy
+
+train_data,test_data = mnist_dataset()
+train_label = np.zeros(shape = [train_data[0].shape[0],10])
+test_label = np.zeros(shape=[test_data[0].shape[0],10])
+train_label[np.arange(train_data[0].shape[0]),np.array(train_data[1])] = 1
+test_label[np.arange(test_data[0].shape[0]),np.array(test_data[1])] = 1
+
+for epoch in range(50):
+    loss,accuracy = train_one_step(model,train_data[0],train_label)
+    print('epoch',epoch,':loss',loss,';accuracy:',accuracy)
+
+loss,accuracy = test(model,test_data[0],test_label)
+print('testloss',loss,'acuuracy',accuracy)
