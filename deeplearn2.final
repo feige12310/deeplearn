@@ -1,0 +1,84 @@
+import numpy as np
+from tensorflow.keras import datasets
+#学到了切换环境以及安装tensorflow
+
+w1 = np.random.normal(loc=0., scale=np.sqrt(2. / (28*28+1 + 200)), size=[28*28+1,100])
+w2 = np.random.normal(loc=0., scale=np.sqrt(2. / (200 + 50)), size=[100,10])
+
+def getdata():
+    (x,y),(x_test,y_test) = datasets.mnist.load_data()
+    x=x/255.0
+    x_test=x_test/255.0
+    return (x,y),(x_test,y_test)
+
+train_data,test_data = getdata()
+
+train_lable = np.zeros(shape=[train_data[0].shape[0],10])
+test_lable = np.zeros(shape=[test_data[0].shape[0],10])
+
+#转换标签时方法很巧妙，批量处理了数据集标签，用arange和array生成两个行向量作为坐标批量对指定位置赋值为一
+#[np.arange（a）生成0至a-1的行向量，np.array防止类型错误
+# （这里花了很长时间，想弄明白这里使用np.array的目的是什么，因为我试了下加不加效果都是一样的，问了下朋友才知道是防止类型错误做的强制转换
+
+train_lable[np.arange(train_data[0].shape[0]),np.array(train_data[1])]=1
+test_lable[np.arange(test_data[0].shape[0]),np.array(test_data[1])]=1
+
+def soft_max(x):
+    x_exp=np.exp(x)
+    epsilon = 1e-10
+    denominator = np.sum(x_exp, axis=1,  keepdims=True)
+    out=x_exp/(denominator + epsilon)
+    return out
+
+def soft_max_grad(out,gray_y):  #softmax反向传播
+    s = out
+    sisj = np.matmul(np.expand_dims(s,axis=2),np.expand_dims(s,axis=1))  # 增加维度做矩阵乘法
+    g_y_exp = np.expand_dims(gray_y,axis=1)
+    tmp = np.matmul(g_y_exp,sisj)    
+    tmp = np.squeeze(tmp,axis=1) #去掉维度一
+    softmax_grad = -tmp + gray_y*s
+    return softmax_grad
+
+def for_and_back(x,lables):
+    x = x.reshape(-1,28*28)#转换为60000*784的矩阵,reshape(-1,a)中-1为自动计算
+    bias = np.ones(shape=[x.shape[0],1])
+    x = np.concatenate([x,bias],axis=1)#拼接x和b
+    h1 = np.matmul(x,w1)  #第一层，x乘w1
+    h1_relu = np.where(h1>0,h1,np.zeros_like(h1)) #relu激活，np.where相当于三目运算符
+    h2 = np.matmul(h1_relu,w2)
+    h2_soft = soft_max(h2) #softmax激活
+    log_prob = np.log(h2_soft+1e-12)  #计算损失函数
+    loss = np.mean(np.sum(-log_prob*lables,axis=1))
+    
+    loss_grad = -1/(h2_soft+1e-12)*lables  #交叉熵导数
+    h2_soft_grad = soft_max_grad(h2_soft,loss_grad) #softmax导数
+    h2_grad = np.matmul(h2_soft_grad,w2.T)
+    w2_grad = np.matmul(h1.T,h2_soft_grad) #w2梯度
+    h1_relu_grad = (h1>0).astype(np.float32)*h2_grad
+    h1_grad = np.matmul(h1_relu_grad,w1.T)
+    w1_grad = np.matmul(x.T,h1_relu_grad) #w1梯度
+    return w1_grad,w2_grad,h2_soft,loss
+
+def train_one_step(w1,w2,x,y,rate=1.5e-5):
+    w1_grad,w2_grad,h2_soft,loss =for_and_back(x,y)
+    w1-=rate*w1_grad #参数优化
+    w2-=rate*w2_grad
+
+    predictions = np.argmax(h2_soft, axis=1) #准确率
+    truth = np.argmax(y, axis=1)
+    accuracy = np.mean(predictions==truth)
+    return w1,w2,loss, accuracy
+
+
+def test(x,y):
+    w1_grad,w2_grad,h2_soft,loss =for_and_back(x,y)
+    predictions = np.argmax(h2_soft, axis=1)
+    truth = np.argmax(y, axis=1)
+    accuracy = np.mean(predictions==truth)
+    return loss,accuracy
+
+for epoch in range(50):
+    w1,w2,loss,accuracy=train_one_step(w1,w2,train_data[0],train_lable)
+    print('epoch',epoch,':loss ',loss,';accuracy ',accuracy)
+loss,accuracy=test(train_data[0],train_lable)
+print('testloss',loss,'acuuracy',accuracy)
